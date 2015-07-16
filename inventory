@@ -1,0 +1,10 @@
+[controller]
+controller-1 ansible_ssh_host=10.20.0.6
+controller-2 ansible_ssh_host=10.20.0.10
+controller-3 ansible_ssh_host=10.20.0.7
+
+[compute]
+compute-1 ansible_ssh_host=10.20.0.11
+compute-2 ansible_ssh_host=10.20.0.9
+compute-3 ansible_ssh_host=10.20.0.8
+compute-4 ansible_ssh_host=10.20.0.13

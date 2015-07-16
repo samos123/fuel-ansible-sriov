@@ -1,0 +1,39 @@
+- hosts: controller
+  vars_files: [ vars.yml ]
+  tasks:
+    - name: Backup original files of Neutron
+      shell: cp {{ item }} {{ item }}.original creates={{ item }}.original
+      with_items:
+        - /etc/neutron/plugins/ml2/ml2_conf_sriov.ini
+        - /etc/neutron/plugins/ml2/ml2_conf.ini
+    - name: Add sriovnicswitch as mechanism_driver to ml2_conf.ini
+      lineinfile: dest=/etc/neutron/plugins/ml2/ml2_conf.ini regexp="^mechanism_drivers =" line="mechanism_drivers =openvswitch,sriovnicswitch"
+      notify: restart neutron-server
+    - name: Change ml2_conf_sriov.ini
+      lineinfile: 
+        dest: /etc/neutron/plugins/ml2/ml2_conf_sriov.ini
+        regexp: 'supported_pci_vendor_devs ='
+        line: "supported_pci_vendor_devs = {{ vendor_id }}:{{ product_id }}"
+      notify: restart neutron-server
+  handlers:
+    - name: restart neutron-server
+      service: name=neutron-server state=restarted
+
+- hosts: compute
+  vars_files: [ vars.yml ]
+  tasks:
+    - name: Load kernel module with VFs enabled
+      shell: modprobe -r ixgbe && modprobe ixgbe max_vfs=7 && touch /root/.vfs_loaded creates=/root/.vfs_loaded
+    - name: Add kernel module with VFs enabled to default loaded kernel modules (This is not working, syslog will report pf is not ready)
+      shell: echo "options ixgbe max_vfs=7" >>/etc/modprobe.d/igb.conf creates=/etc/modprobe.d/igb.conf
+    - name: Temporary workaround for issue of module with options not being loaded the normal modprobe.d way
+      lineinfile: dest=/etc/rc.local line="rmmod ixgbe && modprobe ixgbe max_vfs=7" insertafter=EOF
+    - name: Add pci_passthrough_whitelist to nova.conf
+      lineinfile:
+        dest: /etc/nova/nova.conf
+        insertafter: '^\[DEFAULT\]'
+        line: 'pci_passthrough_whitelist={ "vendor_id":"{{ vendor_id }}","product_id":"{{ product_id }}"}'
+      notify: restart nova-compute
+  handlers:
+    - name: restart nova-compute
+      service: name=nova-compute state=restarted

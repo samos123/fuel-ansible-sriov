@@ -2,3 +2,4 @@
 vendor_id: 8086
 product_id: 10ed
 physical_network: physnet2
+number_of_vfs: 7

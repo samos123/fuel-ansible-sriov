@@ -58,16 +58,9 @@
         - /etc/neutron/plugins/ml2/ml2_conf.ini
         - /etc/nova/nova.conf
     - name: Add VFs on the fly (Hardcoded PCI address of PF)
-      shell: echo '7' > /sys/bus/pci/devices/0000\:87\:00.1/sriov_numvfs
-
-# This is deprecated the pcy sys interface should be used.
-#    - name: Load kernel module with VFs enabled
-#      shell: modprobe -r ixgbe && modprobe ixgbe max_vfs=7 && touch /root/.vfs_loaded creates=/root/.vfs_loaded
-#    - name: Add kernel module with VFs enabled to default loaded kernel modules (This is not working, syslog will report pf is not ready)
-#      shell: echo "options ixgbe max_vfs=7" >>/etc/modprobe.d/igb.conf creates=/etc/modprobe.d/igb.conf
-#    - name: Temporary workaround for issue of module with options not being loaded the normal modprobe.d way
-#      lineinfile: dest=/etc/rc.local line="rmmod ixgbe && modprobe ixgbe max_vfs=7" insertafter=EOF
-#
+      shell: echo '{{ number_of_vfs }}' > /sys/bus/pci/devices/0000\:87\:00.1/sriov_numvfs
+    - name: Add VFs also when system is rebooted. Persist sys pci interface via sysfs.conf
+      shell: echo "bus/pci/devices/0000:87:00.1/sriov_numvfs = {{ number_of_vfs }}" > /etc/sysfs.d/vfs.conf creates=/etc/sysfs.d/vfs.conf
     - name: Add pci_passthrough_whitelist to nova.conf
       lineinfile:
         dest: /etc/nova/nova.conf

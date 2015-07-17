@@ -20,7 +20,7 @@
       with_items:
           - { "regexp": 'agent_required =', "line": "agent_required = False" }
           - { "regexp": 'supported_pci_vendor_devs =', "line": "supported_pci_vendor_devs = {{ vendor_id }}:{{ product_id }}" }
-          - { "regexp": 'physical_device_mappings =', "line": "physical_device_mappings = {{ physical_network }}:eth2 " }
+          - { "regexp": 'physical_device_mappings =', "line": "physical_device_mappings = {{ physical_network }}:{{ pf_iface }}" }
       notify: restart neutron-server
     - name: Add PCI Passthrough scheduler to nova-scheduler
       lineinfile:
@@ -57,15 +57,15 @@
       with_items:
         - /etc/neutron/plugins/ml2/ml2_conf.ini
         - /etc/nova/nova.conf
-    - name: Add VFs on the fly (Hardcoded PCI address of PF)
-      shell: echo '{{ number_of_vfs }}' > /sys/bus/pci/devices/0000\:87\:00.1/sriov_numvfs
-    - name: Add VFs also when system is rebooted. Persist sys pci interface via sysfs.conf
-      shell: echo "bus/pci/devices/0000:87:00.1/sriov_numvfs = {{ number_of_vfs }}" > /etc/sysfs.d/vfs.conf creates=/etc/sysfs.d/vfs.conf
+    - name: Add VFs on the fly
+      shell: echo '{{ number_of_vfs }}' > /sys/class/net/{{ pf_iface }}/device/sriov_numvfs
+    - name: Add VFs also when system is rebooted. Persist sys pci interface via rc.local (sysfs.conf wasn't working) 
+      lineinfile: line="echo '{{ number_of_vfs }}' > /sys/class/net/{{ pf_iface }}/device/sriov_numvfs" insertafter=EOF dest=/etc/rc.local
     - name: Add pci_passthrough_whitelist to nova.conf
       lineinfile:
         dest: /etc/nova/nova.conf
         insertafter: '^\[DEFAULT\]'
-        line: 'pci_passthrough_whitelist={ "address": "*:87:10.*", "physical_network": "{{ physical_network }}"}'
+        line: 'pci_passthrough_whitelist={ "devname": "{{ pf_iface }}", "physical_network": "{{ physical_network }}"}'
       notify: restart nova-compute
     - name: Add sriovnicswitch as mechanism_driver to ml2_conf.ini
       lineinfile: dest=/etc/neutron/plugins/ml2/ml2_conf.ini regexp="^mechanism_drivers =" line="mechanism_drivers =openvswitch,sriovnicswitch"

@@ -1,5 +1,7 @@
 ---
+# Vendor id and product_id are ids of VF not the PF
 vendor_id: 8086
 product_id: 10ed
 physical_network: physnet2
+pf_iface: eth3
 number_of_vfs: 7

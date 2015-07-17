@@ -1,39 +1,90 @@
 - hosts: controller
   vars_files: [ vars.yml ]
+  tags: controller
   tasks:
     - name: Backup original files of Neutron
       shell: cp {{ item }} {{ item }}.original creates={{ item }}.original
       with_items:
         - /etc/neutron/plugins/ml2/ml2_conf_sriov.ini
         - /etc/neutron/plugins/ml2/ml2_conf.ini
+        - /etc/nova/nova.conf
+        - /etc/init/neutron-server.conf
     - name: Add sriovnicswitch as mechanism_driver to ml2_conf.ini
       lineinfile: dest=/etc/neutron/plugins/ml2/ml2_conf.ini regexp="^mechanism_drivers =" line="mechanism_drivers =openvswitch,sriovnicswitch"
       notify: restart neutron-server
     - name: Change ml2_conf_sriov.ini
       lineinfile: 
         dest: /etc/neutron/plugins/ml2/ml2_conf_sriov.ini
-        regexp: 'supported_pci_vendor_devs ='
-        line: "supported_pci_vendor_devs = {{ vendor_id }}:{{ product_id }}"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+          - { "regexp": 'agent_required =', "line": "agent_required = False" }
+          - { "regexp": 'supported_pci_vendor_devs =', "line": "supported_pci_vendor_devs = {{ vendor_id }}:{{ product_id }}" }
+          - { "regexp": 'physical_device_mappings =', "line": "physical_device_mappings = {{ physical_network }}:eth2 " }
+      notify: restart neutron-server
+    - name: Add PCI Passthrough scheduler to nova-scheduler
+      lineinfile:
+        dest: /etc/nova/nova.conf
+        regexp: ^scheduler_default_filters=
+        line: scheduler_default_filters=DifferentHostFilter,RetryFilter,AvailabilityZoneFilter,RamFilter,CoreFilter,DiskFilter,ComputeFilter,ComputeCapabilitiesFilter,ImagePropertiesFilter,ServerGroupAntiAffinityFilter,ServerGroupAffinityFilter,PciPassthroughFilter
+      notify: [ "restart nova-scheduler", "restart nova-api"]
+    - name: Add PCI Passthrough scheduler to nova-scheduler
+      lineinfile:
+        dest: /etc/nova/nova.conf
+        insertafter: ^scheduler_available_filters=
+        line: scheduler_available_filters=nova.scheduler.filters.pci_passthrough_filter.PciPassthroughFilter
+      notify: restart nova-scheduler
+    - name: Add extra config files as param to neutron-server init file
+      lineinfile: 
+        dest: /etc/init/neutron-server.conf
+        regexp: "--config-file /etc/neutron/neutron.conf"
+        line: "    --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugin.ini --config-file /etc/neutron/plugins/ml2/ml2_conf_sriov.ini \\"
       notify: restart neutron-server
   handlers:
     - name: restart neutron-server
       service: name=neutron-server state=restarted
+    - name: restart nova-scheduler
+      service: name=nova-scheduler state=restarted
+    - name: restart nova-api
+      service: name=nova-api state=restarted
 
 - hosts: compute
   vars_files: [ vars.yml ]
+  tags: compute
   tasks:
-    - name: Load kernel module with VFs enabled
-      shell: modprobe -r ixgbe && modprobe ixgbe max_vfs=7 && touch /root/.vfs_loaded creates=/root/.vfs_loaded
-    - name: Add kernel module with VFs enabled to default loaded kernel modules (This is not working, syslog will report pf is not ready)
-      shell: echo "options ixgbe max_vfs=7" >>/etc/modprobe.d/igb.conf creates=/etc/modprobe.d/igb.conf
-    - name: Temporary workaround for issue of module with options not being loaded the normal modprobe.d way
-      lineinfile: dest=/etc/rc.local line="rmmod ixgbe && modprobe ixgbe max_vfs=7" insertafter=EOF
+    - name: Backup original files of Neutron
+      shell: cp {{ item }} {{ item }}.original creates={{ item }}.original
+      with_items:
+        - /etc/neutron/plugins/ml2/ml2_conf.ini
+        - /etc/nova/nova.conf
+    - name: Add VFs on the fly (Hardcoded PCI address of PF)
+      shell: echo '7' > /sys/bus/pci/devices/0000\:87\:00.1/sriov_numvfs
+
+# This is deprecated the pcy sys interface should be used.
+#    - name: Load kernel module with VFs enabled
+#      shell: modprobe -r ixgbe && modprobe ixgbe max_vfs=7 && touch /root/.vfs_loaded creates=/root/.vfs_loaded
+#    - name: Add kernel module with VFs enabled to default loaded kernel modules (This is not working, syslog will report pf is not ready)
+#      shell: echo "options ixgbe max_vfs=7" >>/etc/modprobe.d/igb.conf creates=/etc/modprobe.d/igb.conf
+#    - name: Temporary workaround for issue of module with options not being loaded the normal modprobe.d way
+#      lineinfile: dest=/etc/rc.local line="rmmod ixgbe && modprobe ixgbe max_vfs=7" insertafter=EOF
+#
     - name: Add pci_passthrough_whitelist to nova.conf
       lineinfile:
         dest: /etc/nova/nova.conf
         insertafter: '^\[DEFAULT\]'
-        line: 'pci_passthrough_whitelist={ "vendor_id":"{{ vendor_id }}","product_id":"{{ product_id }}"}'
+        line: 'pci_passthrough_whitelist={ "address": "*:87:10.*", "physical_network": "{{ physical_network }}"}'
       notify: restart nova-compute
+    - name: Add sriovnicswitch as mechanism_driver to ml2_conf.ini
+      lineinfile: dest=/etc/neutron/plugins/ml2/ml2_conf.ini regexp="^mechanism_drivers =" line="mechanism_drivers =openvswitch,sriovnicswitch"
+      notify: restart neutron-plugin-openvswitch-agent
+    - name: Add intel_iommu=on to GRUB_CMDLINE_LINUX_DEFAULT (Please reboot manually if this gets executed)
+      lineinfile: dest=/etc/default/grub line='GRUB_CMDLINE_LINUX_DEFAULT="nomdmonddf nomdmonisw intel_iommu=on"' regexp="GRUB_CMDLINE_LINUX_DEFAULT="
+      notify: update-grub
+
   handlers:
     - name: restart nova-compute
       service: name=nova-compute state=restarted
+    - name: restart neutron-plugin-openvswitch-agent
+      service: name=neutron-plugin-openvswitch-agent state=restarted
+    - name: update-grub
+      shell: update-grub
